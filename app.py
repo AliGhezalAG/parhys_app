@@ -11,8 +11,9 @@ import pandas as pd
 from pandas import DataFrame
 from datetime import datetime
 import math
+import copy
 
-HEADER = ["Consigne %HR", "Consigne °C", "Consigne PPM", "Mean %HR", "Std %HR", " Mean °C", " Std °C", "Mean PPM", "Std PPM", "Start", "End"]
+HEADER = ["Consigne °C", "Consigne %HR", "Consigne PPM", "Mean %HR", "Std %HR", " Mean °C", " Std °C", "Mean PPM", "Std PPM", "Start", "End"]
 
 class App(tk.Frame):
     def __init__(self):
@@ -69,23 +70,45 @@ class App(tk.Frame):
                 os.makedirs(self.target_dir)
                 #shutil.rmtree(self.target_dir)
 
-            df_sec = self.processCycles(self.folders_sec)
-            df_humide = self.processCycles(self.folders_humide)
+            df_sec, last_three_df_sec = self.processCycles(self.folders_sec)
+            df_humide, last_three_df_humide = self.processCycles(self.folders_humide)
 
-            df_sec.to_csv(self.target_dir + "\\final_result_sec.csv", sep=',', encoding='utf-8')
-            df_humide.to_csv(self.target_dir + "\\final_result_humide.csv", sep=',', encoding='utf-8')
+            df_sec.to_csv(self.target_dir + "\\final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+            df_humide.to_csv(self.target_dir + "\\final_result_humide.csv", sep=',', encoding='utf-8', index=False)
+
+            last_three_df_sec.to_csv(self.target_dir + "\\last_three_final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+            last_three_df_humide.to_csv(self.target_dir + "\\last_three_final_result_humide.csv", sep=',', encoding='utf-8', index=False)
 
             self.state_var.set("Done!")
 
+    def sortFunction(self, val): 
+        return val[9]
+
     def processCycles(self, folderToProcess):
         final_result = []
+        last_three_final_results = []
         for cycle in folderToProcess:
             currentCycle = os.path.join(self.folder_selected, cycle)
-            final_result.extend(self.processCycle(currentCycle))
+            cycle_results = self.processCycle(currentCycle)
+            cycle_results_copy = copy.deepcopy(cycle_results)
+            final_result.extend(cycle_results)
+            general_params = cycle_results_copy[0][:3]
+            cycle_results_copy.sort(key = self.sortFunction)
+            last_three = cycle_results_copy[-3:]
+            last_three[0][0] = general_params[0]
+            last_three[0][1] = general_params[1]
+            last_three[0][2] = general_params[2]
+            for i in range(1,3):
+                last_three[i][0] = ''
+                last_three[i][1] = ''
+                last_three[i][2] = ''
+
+            last_three_final_results.extend(last_three)
 
         df = DataFrame(final_result, columns= HEADER)
-        #df.to_csv(self.target_dir + "\\final_result_sec.csv", sep=',', encoding='utf-8')
-        return df
+        last_three_df = DataFrame(last_three_final_results, columns= HEADER)
+        
+        return df, last_three_df
 
     def processCycle(self, currentCycleFolder):
         humidity = re.findall(r'°C - (.+?)%HR',currentCycleFolder)
@@ -103,19 +126,16 @@ class App(tk.Frame):
             temperature = re.findall(r'CYCLE 1-2-3- (.+?)°C',currentCycleFolder)
 
         final_result = []
-        try:
-            for _, _, files in os.walk(currentCycleFolder):
-                for file in files:
+        for _, _, files in os.walk(currentCycleFolder):
+            for file in files:
+                try:
                     tt = pd.read_csv(os.path.join(currentCycleFolder, file))
-                    try:
-                        tt = tt[tt['timestamp'].map(math.isnan) == False]
-                    except:
-                        print("exception!")
+                    tt = tt[tt['timestamp'].map(math.isnan) == False]
                     data = []
                     # Consignes
                     if len(final_result) == 0:
-                        data.append(humidity[0])
                         data.append(temperature[0])
+                        data.append(humidity[0])
                         data.append(pressure[0])
                     else:
                         data.append('')
@@ -124,17 +144,17 @@ class App(tk.Frame):
                     # Mesures
                     data.append(tt["rel_humidity"].mean())
                     data.append(tt["rel_humidity"].std())
-                    data.append(tt["temp"].mean())
+                    data.append(tt["temp"].mean()/10.0)
                     data.append(tt["temp"].std())
                     data.append(tt["comp_h2"].mean())
                     data.append(tt["comp_h2"].std())
                     data.append(datetime.fromtimestamp(tt["timestamp"].iloc[0]))
                     data.append(datetime.fromtimestamp(tt["timestamp"].iloc[-1]))
                     final_result.append(data)
-        except:
-            pass
-            #print("yo!")
-            #print(os.path.join(currentCycleFolder, file))
+                except:
+                    pass
+                    #print("yo!")
+                    #print(os.path.join(currentCycleFolder, file))
         
         return final_result
 

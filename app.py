@@ -12,6 +12,10 @@ from pandas import DataFrame
 from datetime import datetime
 import math
 import copy
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
 
 HEADER = ["Consigne °C", "Consigne %HR", "Consigne PPM", "Mean %HR", "Std %HR", " Mean °C", " Std °C", "Mean PPM", "Std PPM", "Start", "End"]
 
@@ -55,42 +59,66 @@ class App(tk.Frame):
             self.update()
             self.folders_sec = []
             self.folders_humide = []
+
+            self.target_dir = self.folder_selected+"\\results"
+
+            if os.path.exists(self.target_dir) == True:
+                shutil.rmtree(self.target_dir)
+
             for _, dirs, _ in os.walk(self.folder_selected):
                 for dir in dirs:
-                    if "results" in dir:
-                        pass
-                    elif "humide" in dir:
+                    if "humide" in dir:
                         self.folders_humide.append(dir)
                     else :
                         self.folders_sec.append(dir)
 
-            self.target_dir = self.folder_selected+"\\results"
-
             if os.path.exists(self.target_dir) == False:
                 os.makedirs(self.target_dir)
-                #shutil.rmtree(self.target_dir)
+                os.makedirs(self.target_dir+"\\humide")
+                os.makedirs(self.target_dir+"\\sec")
 
-            df_sec, last_three_df_sec = self.processCycles(self.folders_sec)
-            df_humide, last_three_df_humide = self.processCycles(self.folders_humide)
+            df_sec, last_three_df_sec = self.processCycles(self.folders_sec, "SEC")
+            df_humide, last_three_df_humide = self.processCycles(self.folders_humide, "HUMIDE")
 
-            df_sec.to_csv(self.target_dir + "\\final_result_sec.csv", sep=',', encoding='utf-8', index=False)
-            df_humide.to_csv(self.target_dir + "\\final_result_humide.csv", sep=',', encoding='utf-8', index=False)
+            df_sec.to_csv(self.target_dir + "\\sec\\final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+            df_humide.to_csv(self.target_dir + "\\humide\\final_result_humide.csv", sep=',', encoding='utf-8', index=False)
 
-            last_three_df_sec.to_csv(self.target_dir + "\\last_three_final_result_sec.csv", sep=',', encoding='utf-8', index=False)
-            last_three_df_humide.to_csv(self.target_dir + "\\last_three_final_result_humide.csv", sep=',', encoding='utf-8', index=False)
+            last_three_df_sec.to_csv(self.target_dir + "\\sec\\last_three_final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+            last_three_df_humide.to_csv(self.target_dir + "\\humide\\last_three_final_result_humide.csv", sep=',', encoding='utf-8', index=False)
 
             self.state_var.set("Done!")
 
     def sortFunction(self, val): 
         return val[9]
 
-    def processCycles(self, folderToProcess):
+    def dataFrameSortFunction(self, val): 
+        return val['timestamp'].iloc[0]
+
+    def processCycles(self, folderToProcess, type):
+        if type == "SEC":
+            fig_folder = os.path.join(self.folder_selected, "results\\sec")
+        else:
+            fig_folder = os.path.join(self.folder_selected, "results\\humide")
+
         final_result = []
         last_three_final_results = []
         for cycle in folderToProcess:
             currentCycle = os.path.join(self.folder_selected, cycle)
-            cycle_results = self.processCycle(currentCycle)
+            cycle_results, last_three_data = self.processCycle(currentCycle)    
+
+            
+            fig = plt.figure()
+
+            x = range(1, len(cycle_results)+1)
+            y = [tup[7] for tup in cycle_results]
+            yerr = [tup[8] for tup in cycle_results]
+
+            plt.errorbar(x, y, yerr=yerr, uplims=True, lolims=True)
+            fig.savefig(fig_folder + '\\' + cycle +'.png')
+            plt.close(fig)
+
             cycle_results_copy = copy.deepcopy(cycle_results)
+            cycle_results.append(last_three_data)
             final_result.extend(cycle_results)
             general_params = cycle_results_copy[0][:3]
             cycle_results_copy.sort(key = self.sortFunction)
@@ -98,7 +126,7 @@ class App(tk.Frame):
             last_three[0][0] = general_params[0]
             last_three[0][1] = general_params[1]
             last_three[0][2] = general_params[2]
-            for i in range(1,3):
+            for i in range(1,min(len(last_three),3)):
                 last_three[i][0] = ''
                 last_three[i][1] = ''
                 last_three[i][2] = ''
@@ -107,8 +135,19 @@ class App(tk.Frame):
 
         df = DataFrame(final_result, columns= HEADER)
         last_three_df = DataFrame(last_three_final_results, columns= HEADER)
-        
+
         return df, last_three_df
+
+    def processFile(self, df, data):
+        data.append(df["rel_humidity"].mean())
+        data.append(df["rel_humidity"].std())
+        data.append(df["temp"].mean()/10.0)
+        data.append(df["temp"].std())
+        data.append(df["comp_h2"].mean())
+        data.append(df["comp_h2"].std())
+        data.append(datetime.fromtimestamp(df["timestamp"].iloc[0]))
+        data.append(datetime.fromtimestamp(df["timestamp"].iloc[-1]))
+        return data
 
     def processCycle(self, currentCycleFolder):
         humidity = re.findall(r'°C - (.+?)%HR',currentCycleFolder)
@@ -126,37 +165,47 @@ class App(tk.Frame):
             temperature = re.findall(r'CYCLE 1-2-3- (.+?)°C',currentCycleFolder)
 
         final_result = []
+        last_three_measures = []
         for _, _, files in os.walk(currentCycleFolder):
             for file in files:
                 try:
                     tt = pd.read_csv(os.path.join(currentCycleFolder, file))
-                    tt = tt[tt['timestamp'].map(math.isnan) == False]
-                    data = []
-                    # Consignes
-                    if len(final_result) == 0:
-                        data.append(temperature[0])
-                        data.append(humidity[0])
-                        data.append(pressure[0])
-                    else:
-                        data.append('')
-                        data.append('')
-                        data.append('')
-                    # Mesures
-                    data.append(tt["rel_humidity"].mean())
-                    data.append(tt["rel_humidity"].std())
-                    data.append(tt["temp"].mean()/10.0)
-                    data.append(tt["temp"].std())
-                    data.append(tt["comp_h2"].mean())
-                    data.append(tt["comp_h2"].std())
-                    data.append(datetime.fromtimestamp(tt["timestamp"].iloc[0]))
-                    data.append(datetime.fromtimestamp(tt["timestamp"].iloc[-1]))
-                    final_result.append(data)
-                except:
+                    if len(tt.columns) == 7:
+                        tt = tt[tt['timestamp'].map(math.isnan) == False]
+                        tt = tt[tt['adc_mv'].map(math.isnan) == False]
+
+                        if len(tt.values) > 0:
+                            if len(last_three_measures) < 3:
+                                last_three_measures.append(tt)
+                            else:
+                                last_three_measures.sort(key = self.dataFrameSortFunction)
+                                if tt["timestamp"].iloc[0] > last_three_measures[2]["timestamp"].iloc[0]:
+                                    last_three_measures[2] = tt
+
+                            data = []
+                            # Consignes
+                            if len(final_result) == 0:
+                                data.append(temperature[0])
+                                data.append(humidity[0])
+                                data.append(pressure[0])
+                            else:
+                                data.extend(['', '', ''])
+                            final_result.append(self.processFile(tt, data))
+                except pd.errors.EmptyDataError:
                     pass
-                    #print("yo!")
-                    #print(os.path.join(currentCycleFolder, file))
-        
-        return final_result
+
+        last_three_concat = []
+        for dtf in last_three_measures:
+            last_three_concat.extend(dtf.values)
+        try:
+            last_three = pd.DataFrame(last_three_concat, columns=last_three_measures[0].columns)
+            data = ['', '', '']
+            data = self.processFile(last_three, data)
+        except:
+            print(last_three_measures[2].columns)
+            print(currentCycleFolder)
+
+        return final_result, data
 
     def select_folder_btn_clicked(self):
         self.folder_selected = filedialog.askdirectory()

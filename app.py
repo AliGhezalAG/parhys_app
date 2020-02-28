@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-HEADER = ["Consigne °C", "Consigne %HR", "Consigne PPM", "Mean %HR", "Std %HR", " Mean °C", " Std °C", "Mean PPM", "Std PPM", "Start", "End"]
+HEADER = ["Consigne °C", "Consigne %HR", "Consigne PPM", "Mean %HR", "σ %HR", "2xσ %HR", " Mean °C", " σ °C", "2xσ °C", "Mean PPM", "σ PPM", "2xσ PPM", "Start", "End"]
 
 class App(tk.Frame):
     def __init__(self):
@@ -57,39 +57,44 @@ class App(tk.Frame):
         else:
             self.state_var.set("Processing data...")
             self.update()
-            self.folders_sec = []
-            self.folders_humide = []
+            try:
+                self.folders_sec = []
+                self.folders_humide = []
 
-            self.target_dir = self.folder_selected+"\\results"
+                self.target_dir = self.folder_selected+"\\results"
 
-            if os.path.exists(self.target_dir) == True:
-                shutil.rmtree(self.target_dir)
+                if os.path.exists(self.target_dir) == True:
+                    shutil.rmtree(self.target_dir)
 
-            for _, dirs, _ in os.walk(self.folder_selected):
-                for dir in dirs:
-                    if "humide" in dir:
-                        self.folders_humide.append(dir)
-                    else :
-                        self.folders_sec.append(dir)
+                for _, dirs, _ in os.walk(self.folder_selected):
+                    for dir in dirs:
+                        if "humide" in dir:
+                            self.folders_humide.append(dir)
+                        else :
+                            self.folders_sec.append(dir)
 
-            if os.path.exists(self.target_dir) == False:
-                os.makedirs(self.target_dir)
-                os.makedirs(self.target_dir+"\\humide")
-                os.makedirs(self.target_dir+"\\sec")
+                if os.path.exists(self.target_dir) == False:
+                    os.makedirs(self.target_dir)
+                    os.makedirs(self.target_dir+"\\humide")
+                    os.makedirs(self.target_dir+"\\sec")
 
-            df_sec, last_three_df_sec = self.processCycles(self.folders_sec, "SEC")
-            df_humide, last_three_df_humide = self.processCycles(self.folders_humide, "HUMIDE")
+                df_sec, last_three_df_sec = self.processCycles(self.folders_sec, "SEC")
+                df_humide, last_three_df_humide = self.processCycles(self.folders_humide, "HUMIDE")
 
-            df_sec.to_csv(self.target_dir + "\\sec\\final_result_sec.csv", sep=',', encoding='utf-8', index=False)
-            df_humide.to_csv(self.target_dir + "\\humide\\final_result_humide.csv", sep=',', encoding='utf-8', index=False)
+                df_sec.to_csv(self.target_dir + "\\sec\\final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+                df_humide.to_csv(self.target_dir + "\\humide\\final_result_humide.csv", sep=',', encoding='utf-8', index=False)
 
-            last_three_df_sec.to_csv(self.target_dir + "\\sec\\last_three_final_result_sec.csv", sep=',', encoding='utf-8', index=False)
-            last_three_df_humide.to_csv(self.target_dir + "\\humide\\last_three_final_result_humide.csv", sep=',', encoding='utf-8', index=False)
+                last_three_df_sec.to_csv(self.target_dir + "\\sec\\last_three_final_result_sec.csv", sep=',', encoding='utf-8', index=False)
+                last_three_df_humide.to_csv(self.target_dir + "\\humide\\last_three_final_result_humide.csv", sep=',', encoding='utf-8', index=False)
 
-            self.state_var.set("Done!")
+                self.state_var.set("Done!")
+                self.update()
+            except:
+                self.state_var.set("Oups! Something went wrong, please try again.")
+                self.update()
 
     def sortFunction(self, val): 
-        return val[9]
+        return val[12]
 
     def dataFrameSortFunction(self, val): 
         return val['timestamp'].iloc[0]
@@ -110,10 +115,13 @@ class App(tk.Frame):
             fig = plt.figure()
 
             x = range(1, len(cycle_results)+1)
-            y = [tup[7] for tup in cycle_results]
-            yerr = [tup[8] for tup in cycle_results]
+            y = [tup[9] for tup in cycle_results]
+            yerr = [tup[11] for tup in cycle_results]
 
             plt.errorbar(x, y, yerr=yerr, uplims=True, lolims=True)
+            fig.suptitle(cycle)
+            plt.xlabel('Sample number')
+            plt.ylabel('Mean pressure & standard deviation (PPM)')
             fig.savefig(fig_folder + '\\' + cycle +'.png')
             plt.close(fig)
 
@@ -139,12 +147,15 @@ class App(tk.Frame):
         return df, last_three_df
 
     def processFile(self, df, data):
-        data.append(df["rel_humidity"].mean())
+        data.append(df["rel_humidity"].mean()/10.0)
         data.append(df["rel_humidity"].std())
+        data.append(df["rel_humidity"].std()*2.0)
         data.append(df["temp"].mean()/10.0)
         data.append(df["temp"].std())
+        data.append(df["temp"].std()*2.0)
         data.append(df["comp_h2"].mean())
         data.append(df["comp_h2"].std())
+        data.append(df["comp_h2"].std()*2.0)
         data.append(datetime.fromtimestamp(df["timestamp"].iloc[0]))
         data.append(datetime.fromtimestamp(df["timestamp"].iloc[-1]))
         return data
@@ -173,6 +184,7 @@ class App(tk.Frame):
                     if len(tt.columns) == 7:
                         tt = tt[tt['timestamp'].map(math.isnan) == False]
                         tt = tt[tt['adc_mv'].map(math.isnan) == False]
+                        tt = tt[tt['comp_h2']  != 0]
 
                         if len(tt.values) > 0:
                             if len(last_three_measures) < 3:
@@ -180,7 +192,7 @@ class App(tk.Frame):
                             else:
                                 last_three_measures.sort(key = self.dataFrameSortFunction)
                                 if tt["timestamp"].iloc[0] > last_three_measures[2]["timestamp"].iloc[0]:
-                                    last_three_measures[2] = tt
+                                    last_three_measures[0] = tt
 
                             data = []
                             # Consignes
@@ -195,6 +207,7 @@ class App(tk.Frame):
                     pass
 
         last_three_concat = []
+        last_three_measures.sort(key = self.dataFrameSortFunction)
         for dtf in last_three_measures:
             last_three_concat.extend(dtf.values)
         try:
